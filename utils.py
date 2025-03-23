@@ -237,61 +237,27 @@ def hybrid_search(query_text, limit=5, text_weight=1.0, vector_weight=1.2, fuzzy
                 # Ensure extensions are enabled for this session
                 cur.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
                 cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
+
+                cur.execute(sql, (
+                    embedding_str, embedding_str,                      # For semantic search 
+                    ts_query, ts_query, ts_query,                      # For keyword search
+                    query_text, query_text, query_text,                # For fuzzy search similarity
+                    pattern, pattern, pattern,                         # For fuzzy search ILIKE conditions
+                    query_text, query_text, query_text,                # For fuzzy search ORDER BY
+                    vector_weight, k_param,                            # Vector weight and k param
+                    text_weight, k_param,                              # Text weight and k param
+                    fuzzy_weight, k_param,                             # Fuzzy weight and k param
+                    limit                                              # Result limit
+                ))
                 
-                try:
-                    cur.execute(sql, (
-                        embedding_str, embedding_str,                      # For semantic search 
-                        ts_query, ts_query, ts_query,                      # For keyword search
-                        query_text, query_text, query_text,                # For fuzzy search similarity
-                        pattern, pattern, pattern,                         # For fuzzy search ILIKE conditions
-                        query_text, query_text, query_text,                # For fuzzy search ORDER BY
-                        vector_weight, k_param,                            # Vector weight and k param
-                        text_weight, k_param,                              # Text weight and k param
-                        fuzzy_weight, k_param,                             # Fuzzy weight and k param
-                        limit                                              # Result limit
-                    ))
-                    
-                    results = cur.fetchall()
-                    if results:
-                        column_names = [desc[0] for desc in cur.description]
-                        print(f"Hybrid SQL query found {len(results)} results")
-                        return results, column_names
-                
-                except Exception as e:
-                    print(f"Hybrid query error: {e}")
-                    
-                    # Fall back to a simple search if hybrid query fails
-                    print("Falling back to simple pattern matching...")
-                    simple_sql = f"""
-                    SELECT id, "Title", "Location", "Details"
-                    FROM {DB_TABLE}
-                    WHERE "Title" ILIKE %s OR "Location" ILIKE %s OR "Details" ILIKE %s
-                    ORDER BY 
-                        CASE WHEN "Title" ILIKE %s THEN 1
-                             WHEN "Location" ILIKE %s THEN 2
-                             WHEN "Details" ILIKE %s THEN 3
-                             ELSE 4
-                        END
-                    LIMIT %s
-                    """
-                    
-                    try:
-                        cur.execute(simple_sql, (
-                            pattern, pattern, pattern,  # For WHERE conditions
-                            pattern, pattern, pattern,  # For ORDER BY conditions
-                            limit
-                        ))
-                        
-                        results = cur.fetchall()
-                        if results:
-                            column_names = ["id", "Title", "Location", "Details"]
-                            print(f"Simple pattern search found {len(results)} results")
-                            return results, column_names
-                    except Exception as e:
-                        print(f"Simple pattern search error: {e}")
+                results = cur.fetchall()
+                if results:
+                    column_names = [desc[0] for desc in cur.description]
+                    print(f"Hybrid SQL query found {len(results)} results")
+                    return results, column_names
     
     except Exception as e:
-        print(f"Overall search error: {e}")
+        print(f"Search error: {e}")
     
     return None
 

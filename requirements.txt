@@ -1,0 +1,6 @@
+google-genai
+duckdb
+ipykernel
+google
+python-dotenv
+psycopg2-binary

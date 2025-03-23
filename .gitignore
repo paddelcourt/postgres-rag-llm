@@ -1,0 +1,7 @@
+.env
+.venv
+data.dump
+postgres/
+scripts/
+.parquet
+*.parquet

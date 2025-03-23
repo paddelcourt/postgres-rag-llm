@@ -85,13 +85,7 @@ def setup_database():
                 END $$;
             """)
             
-            # Update tsvector column with weighted content
-            cur.execute(f"""
-                UPDATE {DB_TABLE} 
-                SET fts = setweight(to_tsvector('english', coalesce("Title", '')), 'A') || 
-                          setweight(to_tsvector('english', coalesce("Location", '')), 'B') || 
-                          setweight(to_tsvector('english', coalesce("Details", '')), 'C')
-            """)
+           
             
             # Create indexes
             cur.execute(f"CREATE INDEX IF NOT EXISTS idx_fts ON {DB_TABLE} USING GIN(fts)")

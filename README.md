@@ -26,7 +26,7 @@ This project uses Gemini as the LLM model. You can set the environment variable 
 Dataset comes from Binaryy/multimodal-real-estate-search on Huggin Face. Check it out [here](https://huggingface.co/datasets/Binaryy/multimodal-real-estate-search).
 
 
-### 🐳 **Run Postgres and PGAdmin in Docker**
+### 🐳 **Run Postgres in Docker**
 
 - Install Docker Desktop from **[here](https://www.docker.com/products/docker-desktop/)**.
 - Copy **`example.env`** to **`.env`**:
@@ -64,7 +64,7 @@ Dataset comes from Binaryy/multimodal-real-estate-search on Huggin Face. Check i
     ```
 
 
-### Setting up real estate data and postgres database###
+### Setting up real estate data and postgres database ###
 
 1. Download the real estate data above
 2. Put the parquet file in the `data` folder
@@ -185,9 +185,9 @@ Found 5 relevant results
 
 Answer: Yes, I can find you 3-bedroom properties in Lagos from the listings provided. Here's a summary:
 
-*   **Chevron, Lekki Phase 2, Lekki, Lagos:** A 3-bedroom apartment is available. Contact 09015314072 for more information.
-*   **Lekki Phase 1, Lekki, Lagos:** Newly completed and exquisitely built 3-bedroom apartments are for sale in a serviced estate with amenities like a swimming pool and gym. The price is N150 million. Contact Nnenna at 08039177061.
-*   **Ologolo, Lekki, Lagos:** Exquisitely designed 3-bedroom apartments are for sale with amenities like a swimming pool. The price is #65M. Contact Akin at 08138249919.
+*   **Chevron, Lekki Phase 2, Lekki, Lagos:** A 3-bedroom apartment is available.
+*   **Lekki Phase 1, Lekki, Lagos:** Newly completed and exquisitely built 3-bedroom apartments are for sale in a serviced estate with amenities like a swimming pool and gym. The price is N150 million. 
+*   **Ologolo, Lekki, Lagos:** Exquisitely designed 3-bedroom apartments are for sale with amenities like a swimming pool. The price is #65M.
 *   **Orchid, Lekki, Lagos:** Luxury 3-bedroom terraced duplexes are for sale for N65,000,000.
 
 

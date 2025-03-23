@@ -1,17 +1,24 @@
+"""
+PostgreSQL RAG Pipeline with HNSW Vector Search and Reciprocal Rank Fusion
+--------------------------------------------------------------------------
+This script demonstrates a RAG pipeline with PostgreSQL using:
+- HNSW vector indexing for semantic search
+- GIN indexing for full-text search
+- Reciprocal Rank Fusion for combining results
+"""
+
 from google import genai
-from utils import (
-    extract_data_from_source, 
-    embed_data, 
-    update_records_with_embeddings, 
-    setup_search_indexes_and_function,
-    search,
-    add_embedding_column,
-    hybrid_search,
-    generate_embedding
-)
-import duckdb
 import os
 from dotenv import load_dotenv
+import argparse
+import psycopg2
+from utils import (
+    get_connection,
+    setup_database,
+    update_embeddings,
+    hybrid_search,
+    get_all_data
+)
 
 # Load environment variables and initialize API client
 load_dotenv()
@@ -19,39 +26,34 @@ client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 def connect_to_postgres():
     """Connect to PostgreSQL and display database information"""
-    duckdb.sql("ATTACH 'dbname=postgres user=postgres host=127.0.0.1 password=postgres' AS postgres (TYPE postgres);")
-    print("Connected to PostgreSQL database")
-    
-    # Show database statistics
     try:
-        count_result = duckdb.sql("SELECT COUNT(*) FROM postgres.real_estate").fetchall()
-        print(f"Database has {count_result[0][0]} records in the real_estate table")
-        
-        if count_result[0][0] > 0:
-            sample_data = duckdb.sql("SELECT id, \"Title\", \"Location\" FROM postgres.real_estate LIMIT 3").fetchall()
-            print("\nSample records:")
-            for record in sample_data:
-                print(f"ID: {record[0]}, Title: {record[1]}, Location: {record[2]}")
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                # Show database statistics
+                cur.execute("SELECT COUNT(*) FROM real_estate")
+                count = cur.fetchone()[0]
+                print(f"Database has {count} records in the real_estate table")
+                
+                if count > 0:
+                    cur.execute("SELECT id, \"Title\", \"Location\" FROM real_estate LIMIT 3")
+                    sample_data = cur.fetchall()
+                    print("\nSample records:")
+                    for record in sample_data:
+                        print(f"ID: {record[0]}, Title: {record[1]}, Location: {record[2]}")
     except Exception as e:
         print(f"Error checking database: {e}")
 
 def ingest_data(batch_size=10, skip_embeddings=False, skip_updates=False):
     """Process data, generate embeddings, and update the database"""
-    # Make sure embedding column exists
-    add_embedding_column()
-    
     # Get data from database
     print("Extracting data...")
-    data, column_names = extract_data_from_source()
+    data, column_names = get_all_data()
     
     if not data:
         print("No data found")
         return
     
     print(f"Processing {len(data)} records in batches of {batch_size}")
-    
-    # Find ID column index
-    id_index = column_names.index('id')
     
     # Process in batches
     total_records = len(data)
@@ -64,52 +66,31 @@ def ingest_data(batch_size=10, skip_embeddings=False, skip_updates=False):
         
         print(f"\nBatch {batch_start//batch_size + 1}/{(total_records + batch_size - 1)//batch_size}")
         
-        # Generate embeddings
-        if skip_embeddings:
-            print("Using dummy embeddings")
-            batch_embeddings = [[0.0] * 768 for _ in range(len(current_batch))]
-        else:
-            print(f"Generating embeddings for {len(current_batch)} records")
-            batch_embeddings = embed_data((current_batch, column_names))
-        
-        # Skip database updates if requested
+        # Skip updates if requested
         if skip_updates:
             print("Skipping database updates")
             continue
         
-        # Prepare records for update
-        records_to_update = [(row[id_index], embedding) 
-                             for row, embedding in zip(current_batch, batch_embeddings)]
-        
-        # Update database
-        print(f"Updating database with embeddings")
-        updated = update_records_with_embeddings(records_to_update)
+        # Update embeddings
+        batch_data = [row for row in current_batch]
+        updated = update_embeddings(batch_data, column_names)
         total_updated += updated
         
         print(f"Progress: {batch_end}/{total_records} records processed")
     
     print(f"\nCompleted: {total_updated}/{total_records} records updated with embeddings")
     
-    # Set up search indexes
-    if total_updated > 0:
-        print("\nSetting up search indexes...")
-        if setup_search_indexes_and_function():
-            print("Search setup completed successfully")
-            print("Enhanced search is now enabled with:")
-            print("  - Full-text search using PostgreSQL tsvector with GIN indexing")
-            print("    (Title fields weighted higher than Location or Details)")
-            print("  - Fuzzy matching using PostgreSQL pg_trgm extension")
-            print("    (Helps find results with typos or slight variations)")
-            print("  - Semantic search using HNSW vector indexing")
-            print("  - Results combined with Reciprocal Rank Fusion")
-        else:
-            print("Search setup encountered errors")
+    # Ensure search indexes are properly set up
+    print("\nSetting up search indexes...")
+    setup_database()
+    print("\nSearch setup complete! The system now supports:")
+    print("  • Full-text search: Finds keyword matches (Title words count more)")
+    print("  • Fuzzy matching: Handles typos and variations")
+    print("  • Semantic search: Understands meaning using AI embeddings")
+    print("  • Results combined with Reciprocal Rank Fusion (RRF)")
 
 def extract_keywords_from_query(query_text):
-    """
-    Extract relevant search keywords from a natural language query using Gemini.
-    Focuses on main subjects, descriptive terms, attributes, and location references.
-    """
+    """Extract key search terms from a natural language query using Gemini."""
     try:
         prompt = f"""
         Extract the most relevant search keywords from this query: "{query_text}"
@@ -152,7 +133,7 @@ def generate_answer(user_text, search_results):
         context += f"Location: {row[2]}\n"
         context += f"Details: {row[3]}\n\n"
     
-    # Create prompt
+    # Create prompt for Gemini
     prompt = f"""
 Here are some relevant listings. Use them to answer my question.
 Always refer to the information in the listings when answering.
@@ -166,7 +147,7 @@ Question: {user_text}
 """
     
     try:
-        # Call Gemini
+        # Generate response
         response = client.models.generate_content(
             model="gemini-2.0-flash",
             contents=prompt
@@ -184,54 +165,43 @@ def interactive_search():
     print("  • Keyword search - finds exact and related terms")
     print("  • Fuzzy matching - handles typos and variations")
     print("  • Semantic search - understands meaning and context")
+    print("  • Results combined with Reciprocal Rank Fusion")
     print("\nType your questions or 'quit' to exit")
     
     while True:
+        # Get user input
         user_input = input("\nYour question: ")
         
         if user_input.lower() in ['quit', 'exit']:
             print("Thank you for using the Search Assistant. Goodbye!")
             break
         
+        # Process query and search
         print("Processing your query...")
-        
-        # Extract keywords from user input to enhance search
         enhanced_query = extract_keywords_from_query(user_input)
         
         print("Searching with enhanced keywords...")
         
-        # Balance text and vector search weights for best results
+        # Balance search weights for best results
         text_weight = 1.0    # Full-text search weight
-        vector_weight = 1.2  # Semantic search weight
-        fuzzy_weight = 0.7   # Fuzzy search weight
+        vector_weight = 1.2  # Semantic search weight (slightly higher)
         
-        # Generate the embedding
-        embedding = generate_embedding(enhanced_query)
+        # Perform hybrid search
+        results = hybrid_search(enhanced_query, 5, text_weight, vector_weight)
         
-        # Search using hybrid approach
-        if embedding:
-            results = hybrid_search(enhanced_query, embedding, 5, text_weight, vector_weight, fuzzy_weight)
-        else:
-            results = search(enhanced_query)
-        
+        # Generate and display answer
         if not results:
             print("No matching results found.")
             continue
             
         print(f"Found {len(results[0])} relevant results")
-            
-        # Generate answer based on original user query
         answer = generate_answer(user_input, results)
-        
-        # Show answer
         print("\nAnswer:", answer)
 
 if __name__ == "__main__":
-    import argparse
-    
     # Parse command line arguments
-    parser = argparse.ArgumentParser(description="RAG Pipeline")
-    parser.add_argument("--batch", type=int, default=10, help="Batch size (default: 10)")
+    parser = argparse.ArgumentParser(description="RAG Pipeline with PostgreSQL")
+    parser.add_argument("--batch", type=int, default=10, help="Batch size for processing")
     parser.add_argument("--skip-embeddings", action="store_true", help="Skip embedding generation")
     parser.add_argument("--skip-updates", action="store_true", help="Skip database updates")
     parser.add_argument("--skip-ingestion", action="store_true", help="Skip data ingestion (search only)")
@@ -244,14 +214,13 @@ if __name__ == "__main__":
     
     # Set up search indexes
     print("Ensuring search is set up...")
-    setup_search_indexes_and_function()
+    setup_database()
     
     # Run data ingestion if not skipped
     if not args.skip_ingestion:
         print("\n=== Starting Data Processing ===")
         ingest_data(
             batch_size=args.batch,
-            skip_embeddings=args.skip_embeddings,
             skip_updates=args.skip_updates
         )
     

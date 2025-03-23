@@ -147,72 +147,151 @@ def update_embeddings(data, column_names):
     print(f"Updated {updates} records with embeddings")
     return updates
 
-def hybrid_search(query_text, limit=5, text_weight=1.0, vector_weight=1.2):
-    """Perform hybrid search using both vector similarity and text search."""
-    # Generate embedding for the query
-    query_embedding = generate_embedding(query_text)
-    if not query_embedding:
-        print("Could not generate embedding for query")
-        return None
+def hybrid_search(query_text, limit=5, text_weight=1.0, vector_weight=1.2, fuzzy_weight=0.8):
+    """Perform hybrid search using vector similarity, text search, and fuzzy matching.
     
-    # Format embedding for PostgreSQL
-    embedding_str = "[" + ",".join(str(v) for v in query_embedding) + "]"
-    
-    # RRF parameter (Reciprocal Rank Fusion)
-    k_param = 60
-    
-    # SQL query using Common Table Expressions (CTEs) for hybrid search
-    sql = """
-    WITH semantic_search AS (
-        SELECT id, "Title", "Location", "Details", 
-               RANK () OVER (ORDER BY embedding <=> %(embedding)s) AS rank
-        FROM """ + DB_TABLE + """
-        ORDER BY embedding <=> %(embedding)s
-        LIMIT 20
-    ),
-    keyword_search AS (
-        SELECT id, "Title", "Location", "Details",
-               RANK () OVER (ORDER BY ts_rank_cd(fts, to_tsquery('english', %(query)s)) DESC) AS rank
-        FROM """ + DB_TABLE + """
-        WHERE fts @@ to_tsquery('english', %(query)s)
-        ORDER BY ts_rank_cd(fts, to_tsquery('english', %(query)s)) DESC
-        LIMIT 20
-    )
-    SELECT
-        COALESCE(s.id, k.id) AS id,
-        COALESCE(s."Title", k."Title") AS "Title",
-        COALESCE(s."Location", k."Location") AS "Location",
-        COALESCE(s."Details", k."Details") AS "Details",
-        (%(vector_weight)s * COALESCE(1.0 / (%(k)s + s.rank), 0.0)) +
-        (%(text_weight)s * COALESCE(1.0 / (%(k)s + k.rank), 0.0)) AS score
-    FROM semantic_search s
-    FULL OUTER JOIN keyword_search k ON s.id = k.id
-    ORDER BY score DESC
-    LIMIT %(limit)s
+    This function uses a single SQL query with Common Table Expressions (CTEs) to:
+    1. Perform vector similarity search
+    2. Perform full-text search
+    3. Perform fuzzy matching with similarity
+    4. Combine all results using Reciprocal Rank Fusion
     """
+    try:
+        # Generate embedding for the query
+        query_embedding = generate_embedding(query_text)
+        if not query_embedding:
+            print("Could not generate embedding for query")
+            return None
+        
+        # Format embedding for PostgreSQL
+        embedding_str = "[" + ",".join(str(v) for v in query_embedding) + "]"
+        
+        # Prepare tsquery - replace spaces with '&' for AND logic
+        try:
+            ts_query = ' & '.join(word for word in query_text.split() if word)
+        except Exception as e:
+            print(f"Error preparing tsquery: {e}")
+            ts_query = query_text
+        
+        # Pattern for ILIKE searches
+        pattern = f"%{query_text}%"
+        
+        # RRF parameter (Reciprocal Rank Fusion)
+        k_param = 60
+        
+        # SQL query using Common Table Expressions (CTEs) for hybrid search
+        sql = f"""
+        WITH 
+        semantic_search AS (
+            SELECT id, "Title", "Location", "Details", 
+                   ROW_NUMBER() OVER (ORDER BY embedding <=> %s::vector) AS rank
+            FROM {DB_TABLE}
+            ORDER BY embedding <=> %s::vector
+            LIMIT 30
+        ),
+        keyword_search AS (
+            SELECT id, "Title", "Location", "Details",
+                   ROW_NUMBER() OVER (ORDER BY ts_rank_cd(fts, to_tsquery('english', %s)) DESC) AS rank
+            FROM {DB_TABLE}
+            WHERE fts @@ to_tsquery('english', %s)
+            ORDER BY ts_rank_cd(fts, to_tsquery('english', %s)) DESC
+            LIMIT 30
+        ),
+        fuzzy_search AS (
+            SELECT id, "Title", "Location", "Details",
+                   ROW_NUMBER() OVER (
+                      ORDER BY 
+                          greatest(
+                              similarity("Title", %s),
+                              similarity("Location", %s),
+                              similarity("Details", %s)
+                          ) DESC
+                   ) AS rank
+            FROM {DB_TABLE}
+            WHERE "Title" ILIKE %s OR "Location" ILIKE %s OR "Details" ILIKE %s
+            ORDER BY 
+                greatest(
+                    similarity("Title", %s),
+                    similarity("Location", %s),
+                    similarity("Details", %s)
+                ) DESC
+            LIMIT 30
+        )
+        SELECT
+            COALESCE(s.id, COALESCE(k.id, f.id)) AS id,
+            COALESCE(s."Title", COALESCE(k."Title", f."Title")) AS "Title",
+            COALESCE(s."Location", COALESCE(k."Location", f."Location")) AS "Location",
+            COALESCE(s."Details", COALESCE(k."Details", f."Details")) AS "Details",
+            ((%s * COALESCE(1.0 / (%s + s.rank), 0.0)) +
+             (%s * COALESCE(1.0 / (%s + k.rank), 0.0)) +
+             (%s * COALESCE(1.0 / (%s + f.rank), 0.0))) AS score
+        FROM semantic_search s
+        FULL OUTER JOIN keyword_search k ON s.id = k.id
+        FULL OUTER JOIN fuzzy_search f ON COALESCE(s.id, k.id) = f.id
+        ORDER BY score DESC
+        LIMIT %s
+        """
+        
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                # Ensure extensions are enabled for this session
+                cur.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+                cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
+                
+                try:
+                    cur.execute(sql, (
+                        embedding_str, embedding_str,                      # For semantic search 
+                        ts_query, ts_query, ts_query,                      # For keyword search
+                        query_text, query_text, query_text,                # For fuzzy search similarity
+                        pattern, pattern, pattern,                         # For fuzzy search ILIKE conditions
+                        query_text, query_text, query_text,                # For fuzzy search ORDER BY
+                        vector_weight, k_param,                            # Vector weight and k param
+                        text_weight, k_param,                              # Text weight and k param
+                        fuzzy_weight, k_param,                             # Fuzzy weight and k param
+                        limit                                              # Result limit
+                    ))
+                    
+                    results = cur.fetchall()
+                    if results:
+                        column_names = [desc[0] for desc in cur.description]
+                        print(f"Hybrid SQL query found {len(results)} results")
+                        return results, column_names
+                
+                except Exception as e:
+                    print(f"Hybrid query error: {e}")
+                    
+                    # Fall back to a simple search if hybrid query fails
+                    print("Falling back to simple pattern matching...")
+                    simple_sql = f"""
+                    SELECT id, "Title", "Location", "Details"
+                    FROM {DB_TABLE}
+                    WHERE "Title" ILIKE %s OR "Location" ILIKE %s OR "Details" ILIKE %s
+                    ORDER BY 
+                        CASE WHEN "Title" ILIKE %s THEN 1
+                             WHEN "Location" ILIKE %s THEN 2
+                             WHEN "Details" ILIKE %s THEN 3
+                             ELSE 4
+                        END
+                    LIMIT %s
+                    """
+                    
+                    try:
+                        cur.execute(simple_sql, (
+                            pattern, pattern, pattern,  # For WHERE conditions
+                            pattern, pattern, pattern,  # For ORDER BY conditions
+                            limit
+                        ))
+                        
+                        results = cur.fetchall()
+                        if results:
+                            column_names = ["id", "Title", "Location", "Details"]
+                            print(f"Simple pattern search found {len(results)} results")
+                            return results, column_names
+                    except Exception as e:
+                        print(f"Simple pattern search error: {e}")
     
-    # Execute query with named parameters
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            # Convert spaces to & for tsquery
-            ts_query = ' & '.join(query_text.split())
-            
-            # Execute with named parameters
-            cur.execute(sql, {
-                "embedding": embedding_str,
-                "query": ts_query,
-                "k": k_param,
-                "vector_weight": float(vector_weight),
-                "text_weight": float(text_weight),
-                "limit": limit
-            })
-            
-            # Get results
-            results = cur.fetchall()
-            
-            if results:
-                column_names = [desc[0] for desc in cur.description]
-                return results, column_names
+    except Exception as e:
+        print(f"Overall search error: {e}")
     
     return None
 

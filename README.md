@@ -52,12 +52,9 @@ Dataset comes from Binaryy/multimodal-real-estate-search on Huggin Face. Check i
 - You can check that your Docker Compose stack is running by either:
     - Going into Docker Desktop: you should see an entry there with a drop-down for each of the containers running in your Docker Compose stack.
     - Running **`docker ps -a`** and looking for the containers with the name **`postgres`**.
-- If you navigate to **`http://localhost:5050`** you will be able to see the PGAdmin instance up and running and should be able to connect to the following server as details shown:
-    
-    <img src=".attachments/pgadmin-server.png" style="width:500px;"/> 
 
 
-- When you're finished with your Postgres instance(required in week 1 & 2 & 4), you can stop the Docker Compose containers with:
+- When you're finished with your Postgres instance, you can stop the Docker Compose containers with:
     
     ```bash
     docker compose stop

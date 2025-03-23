@@ -1,5 +1,4 @@
 google-genai
-duckdb
 ipykernel
 google
 python-dotenv

@@ -63,32 +63,13 @@ Dataset comes from Binaryy/multimodal-real-estate-search on Huggin Face. Check i
     docker compose stop
     ```
 
-## :three: **Connect to Postgres in Local Database Client**
 
-- Some options for interacting with your Postgres instance:
-    - DataGrip - JetBrains; 30-day free trial or paid version
-    - VSCode built-in extension (there are a few of these).
-    - PGAdmin.
-    - Postbird.
-    - Dbeaver
-- Using your client of choice, follow the instructions to establish a new PostgreSQL connection.
-    - The default username is **`postgres`** and corresponds to **`$POSTGRES_USER`** in your **`.env`**.
-    - The default password is **`postgres`** and corresponds to **`$POSTGRES_PASSWORD`** in your **`.env`**.
-    - The default database is **`postgres`** and corresponds to **`$POSTGRES_DB`** in your **`.env`**.
-    - The default host is **`localhost`** or **`0.0.0.0`.** This is the IP address of the Docker container running the PostgreSQL instance.
-    - The default port for Postgres is **`5432` .** This corresponds to the **`$CONTAINER_PORT`** variable in the **`.env`** file.
-    
-    &rarr; :bulb: You can edit these values by modifying the corresponding values in **`.env`**.
-    
-- If the test connection is successful, click "Finish" or "Save" to save the connection. You should now be able to use the database client to manage your PostgreSQL database locally.
+### Setting up real estate data and postgres database###
 
-
-### Setting up real estate data ###
-
-- Download the real estate data above
-- Put the parquet file in the `data` folder
-- Run the postgres-sql.ipynb file to load the data into postgres
-- Run the rag-pipeline.py file to test the pipeline
+1. Download the real estate data above
+2. Put the parquet file in the `data` folder
+3. Run the postgres-sql.ipynb file to load the data into postgres and create the database tables
+3. Run the rag-pipeline.py file to test the pipeline
 
 ## How the Code Works
 

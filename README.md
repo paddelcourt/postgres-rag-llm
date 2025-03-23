@@ -24,6 +24,7 @@ This project uses Gemini as the LLM model. You can set the environment variable 
 
 ### Dataset ###
 Dataset comes from Binaryy/multimodal-real-estate-search on Huggin Face. Check it out [here](https://huggingface.co/datasets/Binaryy/multimodal-real-estate-search).
+For the purpose of this project, we are limiting the dataset to 100 rows. This is done on postgress-sql.ipynb file.
 
 
 ### 🐳 **Run Postgres in Docker**
@@ -102,16 +103,6 @@ The RAG pipeline consists of the following main components:
    - Retrieves relevant property listings
    - Generates natural language responses based on the retrieved data
 
-### Search Mechanism
-
-The system provides a sophisticated search mechanism with hybrid search based on Supabase's hybrid search.
-
-- **Hybrid Search**: Combines both approaches for optimal results
-
-The search functionality includes intelligent recognition of:
-- Location-based queries (e.g., "Lagos", "Lekki")
-- Property type queries (e.g., "apartment", "duplex")
-- Bedroom count queries (e.g., "3 bedroom")
 
 ## Running the Pipeline
 

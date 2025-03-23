@@ -1,47 +1,30 @@
 from google import genai
-from google.genai import types
 from utils import (
     extract_data_from_source, 
     embed_data, 
     update_records_with_embeddings, 
     setup_search_indexes_and_function,
     search,
-    add_embedding_column
+    add_embedding_column,
+    hybrid_search,
+    generate_embedding
 )
 import duckdb
 import os
 from dotenv import load_dotenv
 
-# Connect to database and initialize API client
-def connect_to_postgres():
-    duckdb.sql("ATTACH 'dbname=postgres user=postgres host=127.0.0.1 password=postgres' AS postgres (TYPE postgres);")
-    print("Connected to PostgreSQL database")
-    
-    # Diagnostic check for data
-    try:
-        count_result = duckdb.sql("SELECT COUNT(*) FROM postgres.real_estate").fetchall()
-        print(f"Database has {count_result[0][0]} records in the real_estate table")
-        
-        if count_result[0][0] > 0:
-            sample_data = duckdb.sql("SELECT id, \"Title\", \"Location\" FROM postgres.real_estate LIMIT 3").fetchall()
-            print("\nSample records:")
-            for record in sample_data:
-                print(f"ID: {record[0]}, Title: {record[1]}, Location: {record[2]}")
-    except Exception as e:
-        print(f"Diagnostic error: {e}")
-
+# Load environment variables and initialize API client
 load_dotenv()
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
-def ingest_table_embeddings(batch_size=10, skip_embeddings=False, skip_updates=False):
-    """
-    Process data, generate embeddings, and update the database.
-    
-    Args:
-        batch_size: Process this many records at once
-        skip_embeddings: Skip embedding generation for testing
-        skip_updates: Skip database updates for testing
-    """
+def connect_to_postgres():
+    """Connect to PostgreSQL and display database information"""
+    duckdb.sql("ATTACH 'dbname=postgres user=postgres host=127.0.0.1 password=postgres' AS postgres (TYPE postgres);")
+    print("Connected to PostgreSQL database")
+   
+
+def ingest_data(batch_size=10, skip_embeddings=False, skip_updates=False):
+    """Process data, generate embeddings, and update the database"""
     # Make sure embedding column exists
     add_embedding_column()
     
@@ -103,20 +86,13 @@ def ingest_table_embeddings(batch_size=10, skip_embeddings=False, skip_updates=F
             print("Hybrid search is enabled with:")
             print("  - Full-text search using PostgreSQL tsvector with GIN indexing")
             print("  - Semantic search using HNSW vector indexing")
-            print("  - Results combined with Reciprocal Rank Fusion")
         else:
             print("Search setup encountered errors")
 
 def extract_keywords_from_query(query_text):
     """
-    Use Gemini to extract relevant search keywords from a natural language query.
-    This makes search more effective by focusing on the most important terms.
-    
-    Args:
-        query_text: The user's natural language query
-        
-    Returns:
-        str: Extracted keywords suitable for search
+    Extract relevant search keywords from a natural language query using Gemini.
+    Focuses on main subjects, descriptive terms, attributes, and location references.
     """
     try:
         prompt = f"""
@@ -147,7 +123,7 @@ def extract_keywords_from_query(query_text):
         return query_text  # Return original query if keyword extraction fails
 
 def generate_answer(user_text, search_results):
-    """Generate an answer using Gemini based on search results."""
+    """Generate an answer using Gemini based on search results"""
     if not search_results:
         return "I couldn't find any relevant information for your query."
     
@@ -164,8 +140,7 @@ def generate_answer(user_text, search_results):
     prompt = f"""
 Here are some relevant listings. Use them to answer my question.
 Always refer to the information in the listings when answering.
-If the information is not matching with the question, just say so. 
-I.e the rooms are not matching with the number of bedrooms in the question.
+If the information doesn't match the question, please say so.
 
 <listings>
 {context}
@@ -178,9 +153,6 @@ Question: {user_text}
         # Call Gemini
         response = client.models.generate_content(
             model="gemini-2.0-flash",
-            config=types.GenerateContentConfig(
-                system_instruction="You're an expert at answering questions based on the provided listings. Always use the documents provided in the context."
-            ),
             contents=prompt
         )
         
@@ -190,19 +162,16 @@ Question: {user_text}
         return f"I found matching items but couldn't generate a response: {str(e)[:100]}..."
 
 def interactive_search():
-    """Interactive search loop."""
-    print("Welcome to the Advanced Search Assistant!")
-    print("This system uses hybrid search with:")
-    print("  - PostgreSQL full-text search (tsvector/tsquery with GIN index)")
-    print("  - HNSW vector indexing for semantic search")
-    print("  - Reciprocal Rank Fusion to combine results")
-    print("\nAsk questions about the data or type 'quit' to exit")
+    """Interactive search interface"""
+    print("\n=== Search Assistant ===")
+    print("This system uses a combination of text search and semantic search")
+    print("Type your questions or 'quit' to exit")
     
     while True:
         user_input = input("\nYour question: ")
         
         if user_input.lower() in ['quit', 'exit']:
-            print("Thank you for using the Advanced Search Assistant. Goodbye!")
+            print("Thank you for using the Search Assistant. Goodbye!")
             break
         
         print("Processing your query...")
@@ -210,13 +179,13 @@ def interactive_search():
         # Extract keywords from user input to enhance search
         enhanced_query = extract_keywords_from_query(user_input)
         
-        print("Searching with hybrid approach (text + vector)...")
+        print("Searching with enhanced keywords...")
         
-        # Search for relevant items using the enhanced query
+        # Search using the enhanced query
         results = search(enhanced_query)
         
         if not results:
-            print("No matching results found for your query.")
+            print("No matching results found.")
             continue
             
         print(f"Found {len(results[0])} relevant results")
@@ -228,57 +197,33 @@ def interactive_search():
         print("\nAnswer:", answer)
 
 if __name__ == "__main__":
-    import sys
+    import argparse
     
-    # Default settings
-    batch_size = 10
-    skip_embeddings = False
-    skip_updates = False
-    skip_ingestion = False
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="RAG Pipeline")
+    parser.add_argument("--batch", type=int, default=10, help="Batch size (default: 10)")
+    parser.add_argument("--skip-embeddings", action="store_true", help="Skip embedding generation")
+    parser.add_argument("--skip-updates", action="store_true", help="Skip database updates")
+    parser.add_argument("--skip-ingestion", action="store_true", help="Skip data ingestion (search only)")
     
-    # Process command line arguments
-    if len(sys.argv) > 1:
-        for arg in sys.argv[1:]:
-            if arg.startswith("--batch="):
-                try:
-                    batch_size = int(arg.split("=")[1])
-                except:
-                    print(f"Invalid batch size: {arg}")
-            elif arg == "--skip-embeddings":
-                skip_embeddings = True
-                print("Will skip embedding generation")
-            elif arg == "--skip-updates":
-                skip_updates = True
-                print("Will skip database updates")
-            elif arg == "--skip-ingestion":
-                skip_ingestion = True
-                print("Will skip data ingestion")
-            elif arg == "--help":
-                print("\nRAG Pipeline Options:")
-                print("  --batch=N           Set batch size (default: 10)")
-                print("  --skip-embeddings   Skip embedding generation")
-                print("  --skip-updates      Skip database updates")
-                print("  --skip-ingestion    Skip data ingestion (search only)")
-                print("  --help              Show this help message")
-                sys.exit(0)
+    args = parser.parse_args()
     
     # Connect to database
     print("Connecting to database...")
     connect_to_postgres()
     
-    # Ensure search indexes and functions are set up
-    print("Ensuring search setup is complete...")
+    # Set up search indexes
+    print("Ensuring search is set up...")
     setup_search_indexes_and_function()
     
     # Run data ingestion if not skipped
-    if not skip_ingestion:
+    if not args.skip_ingestion:
         print("\n=== Starting Data Processing ===")
-        ingest_table_embeddings(
-            batch_size=batch_size,
-            skip_embeddings=skip_embeddings,
-            skip_updates=skip_updates
+        ingest_data(
+            batch_size=args.batch,
+            skip_embeddings=args.skip_embeddings,
+            skip_updates=args.skip_updates
         )
     
     # Start interactive search
-    print("\n=== Starting Interactive Search ===")
     interactive_search()

@@ -21,7 +21,19 @@ def connect_to_postgres():
     """Connect to PostgreSQL and display database information"""
     duckdb.sql("ATTACH 'dbname=postgres user=postgres host=127.0.0.1 password=postgres' AS postgres (TYPE postgres);")
     print("Connected to PostgreSQL database")
-   
+    
+    # Show database statistics
+    try:
+        count_result = duckdb.sql("SELECT COUNT(*) FROM postgres.real_estate").fetchall()
+        print(f"Database has {count_result[0][0]} records in the real_estate table")
+        
+        if count_result[0][0] > 0:
+            sample_data = duckdb.sql("SELECT id, \"Title\", \"Location\" FROM postgres.real_estate LIMIT 3").fetchall()
+            print("\nSample records:")
+            for record in sample_data:
+                print(f"ID: {record[0]}, Title: {record[1]}, Location: {record[2]}")
+    except Exception as e:
+        print(f"Error checking database: {e}")
 
 def ingest_data(batch_size=10, skip_embeddings=False, skip_updates=False):
     """Process data, generate embeddings, and update the database"""
@@ -83,9 +95,13 @@ def ingest_data(batch_size=10, skip_embeddings=False, skip_updates=False):
         print("\nSetting up search indexes...")
         if setup_search_indexes_and_function():
             print("Search setup completed successfully")
-            print("Hybrid search is enabled with:")
+            print("Enhanced search is now enabled with:")
             print("  - Full-text search using PostgreSQL tsvector with GIN indexing")
+            print("    (Title fields weighted higher than Location or Details)")
+            print("  - Fuzzy matching using PostgreSQL pg_trgm extension")
+            print("    (Helps find results with typos or slight variations)")
             print("  - Semantic search using HNSW vector indexing")
+            print("  - Results combined with Reciprocal Rank Fusion")
         else:
             print("Search setup encountered errors")
 
@@ -163,9 +179,12 @@ Question: {user_text}
 
 def interactive_search():
     """Interactive search interface"""
-    print("\n=== Search Assistant ===")
-    print("This system uses a combination of text search and semantic search")
-    print("Type your questions or 'quit' to exit")
+    print("\n=== Enhanced Search Assistant ===")
+    print("This system uses a powerful combination of search techniques:")
+    print("  • Keyword search - finds exact and related terms")
+    print("  • Fuzzy matching - handles typos and variations")
+    print("  • Semantic search - understands meaning and context")
+    print("\nType your questions or 'quit' to exit")
     
     while True:
         user_input = input("\nYour question: ")
@@ -181,8 +200,19 @@ def interactive_search():
         
         print("Searching with enhanced keywords...")
         
-        # Search using the enhanced query
-        results = search(enhanced_query)
+        # Balance text and vector search weights for best results
+        text_weight = 1.0    # Full-text search weight
+        vector_weight = 1.2  # Semantic search weight
+        fuzzy_weight = 0.7   # Fuzzy search weight
+        
+        # Generate the embedding
+        embedding = generate_embedding(enhanced_query)
+        
+        # Search using hybrid approach
+        if embedding:
+            results = hybrid_search(enhanced_query, embedding, 5, text_weight, vector_weight, fuzzy_weight)
+        else:
+            results = search(enhanced_query)
         
         if not results:
             print("No matching results found.")

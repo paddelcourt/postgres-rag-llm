@@ -82,7 +82,7 @@ The RAG pipeline consists of the following main components:
 1. **Data Extraction**: Reads real estate listings from a PostgreSQL database
 2. **Text Embedding**: Generates vector embeddings for each property listing using Gemini's text-embedding-004 model
 3. **Database Storage**: Stores embeddings alongside original data in PostgreSQL
-4. **Search Functionality**: Provides hybrid search capabilities combining semantic similarity and keyword matching
+4. **Search Functionality**: Provides hybrid search capabilities combining semantic similarity, text search, and fuzzy search
 5. **Answer Generation**: Uses Gemini's generative AI to create natural language responses based on retrieved properties
 
 ### Key Files and Components
@@ -169,11 +169,26 @@ Once the interactive search interface starts, you can:
 - Ask about specific locations, property types, or features
 - Type 'quit' or 'exit' to end the session
 
-Example queries:
-- "Can you find me an apartment in Lagos?"
-- "Show me 3 bedroom properties in Lekki"
-- "What properties are available in Port Harcourt?"
+Example output:
+
+```bash
+
+Type your questions or 'quit' to exit
+
+Your question: hi, can you find me 3 bedroom in lagos
+
+Processing your query...
+Enhanced search query: '3 bedroom Lagos'
+Searching with enhanced keywords...
+Search debug info: {'text': {'rank': 1, 'score': 0.12222222}, 'fuzzy': {'rank': 2, 'score': 0.32258064, 'title_sim': 0.32258064, 'location_sim': 0.16216215}, 'vector': {'rank': None, 'score': None}}
+Found 5 relevant results
+
+Answer: Yes, I can find you 3-bedroom properties in Lagos from the listings provided. Here's a summary:
+
+*   **Chevron, Lekki Phase 2, Lekki, Lagos:** A 3-bedroom apartment is available. Contact 09015314072 for more information.
+*   **Lekki Phase 1, Lekki, Lagos:** Newly completed and exquisitely built 3-bedroom apartments are for sale in a serviced estate with amenities like a swimming pool and gym. The price is N150 million. Contact Nnenna at 08039177061.
+*   **Ologolo, Lekki, Lagos:** Exquisitely designed 3-bedroom apartments are for sale with amenities like a swimming pool. The price is #65M. Contact Akin at 08138249919.
+*   **Orchid, Lekki, Lagos:** Luxury 3-bedroom terraced duplexes are for sale for N65,000,000.
 
 
-
-
+```

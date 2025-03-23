@@ -161,6 +161,9 @@ def setup_search_indexes_and_function():
         # Set up text search
         setup_text_search()
         
+        # Set up fuzzy search
+        setup_fuzzy_search()
+        
         # Set up vector search
         setup_vector_index()
         
@@ -187,17 +190,16 @@ def setup_text_search():
                     conn.commit()
                     print("Added tsvector column for full-text search")
                 
-                # Update the tsvector column
+                # Update the tsvector column with weighted text
                 cur.execute(f"""
                     UPDATE {POSTGRES_TABLE}
-                    SET fts = to_tsvector('english', 
-                        coalesce("Title", '') || ' ' || 
-                        coalesce("Location", '') || ' ' || 
-                        coalesce("Details", ''))
+                    SET fts = setweight(to_tsvector('english', coalesce("Title", '')), 'A') || 
+                             setweight(to_tsvector('english', coalesce("Location", '')), 'B') ||
+                             setweight(to_tsvector('english', coalesce("Details", '')), 'C')
                     WHERE fts IS NULL
                 """)
                 conn.commit()
-                print("Updated tsvector column with document content")
+                print("Updated tsvector column with weighted document content")
                 
                 # Create GIN index for full-text search
                 cur.execute(f"CREATE INDEX IF NOT EXISTS idx_fts_gin ON {POSTGRES_TABLE} USING GIN(fts)")
@@ -207,6 +209,28 @@ def setup_text_search():
                 return True
     except Exception as e:
         print(f"Warning: Text search setup error: {e}")
+        return False
+
+def setup_fuzzy_search():
+    """Set up trigram indexes for fuzzy matching."""
+    try:
+        # Connect directly to PostgreSQL
+        with psycopg2.connect(**PG_PARAMS) as conn:
+            with conn.cursor() as cur:
+                # Enable pg_trgm extension if not already enabled
+                cur.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+                conn.commit()
+                print("Enabled pg_trgm extension for fuzzy search")
+                
+                # Create trigram indexes for title and location
+                cur.execute(f"CREATE INDEX IF NOT EXISTS idx_title_trgm ON {POSTGRES_TABLE} USING GIN (\"Title\" gin_trgm_ops)")
+                cur.execute(f"CREATE INDEX IF NOT EXISTS idx_location_trgm ON {POSTGRES_TABLE} USING GIN (\"Location\" gin_trgm_ops)")
+                conn.commit()
+                print("Created trigram indexes for fuzzy search")
+                
+                return True
+    except Exception as e:
+        print(f"Warning: Fuzzy search setup error: {e}")
         return False
 
 def setup_vector_index():
@@ -266,6 +290,7 @@ def setup_hybrid_search_function():
                   match_count int,
                   text_weight float DEFAULT 1.0,
                   vector_weight float DEFAULT 1.0,
+                  fuzzy_weight float DEFAULT 0.5,
                   rrf_k int DEFAULT 60
                 )
                 RETURNS TABLE (
@@ -273,7 +298,8 @@ def setup_hybrid_search_function():
                   title text,
                   location text,
                   details text,
-                  score float
+                  score float,
+                  debug jsonb
                 )
                 LANGUAGE SQL
                 AS $$
@@ -291,6 +317,22 @@ def setup_hybrid_search_function():
                     websearch_to_tsquery('english', query_text) @@ fts
                   LIMIT match_count * 3
                 ),
+                fuzzy_search AS (
+                  SELECT
+                    id,
+                    "Title",
+                    "Location",
+                    "Details",
+                    similarity("Title", query_text) as title_sim,
+                    similarity("Location", query_text) as location_sim,
+                    greatest(similarity("Title", query_text), similarity("Location", query_text)) as fuzzy_score,
+                    ROW_NUMBER() OVER(ORDER BY greatest(similarity("Title", query_text), similarity("Location", query_text)) DESC) as rank_fuzzy
+                  FROM
+                    {POSTGRES_TABLE}
+                  WHERE
+                    "Title" % query_text OR "Location" % query_text
+                  LIMIT match_count * 3
+                ),
                 vector_search AS (
                   SELECT
                     id,
@@ -306,17 +348,26 @@ def setup_hybrid_search_function():
                   LIMIT match_count * 3
                 )
                 SELECT
-                  COALESCE(t.id, v.id) as id,
-                  COALESCE(t."Title", v."Title") as title,
-                  COALESCE(t."Location", v."Location") as location,
-                  COALESCE(t."Details", v."Details") as details,
+                  COALESCE(t.id, f.id, v.id) as id,
+                  COALESCE(t."Title", f."Title", v."Title") as title,
+                  COALESCE(t."Location", f."Location", v."Location") as location,
+                  COALESCE(t."Details", f."Details", v."Details") as details,
                   (
                     COALESCE(1.0 / (rrf_k + t.rank_text), 0.0) * text_weight +
+                    COALESCE(1.0 / (rrf_k + f.rank_fuzzy), 0.0) * fuzzy_weight +
                     COALESCE(1.0 / (rrf_k + v.rank_vector), 0.0) * vector_weight
-                  ) as score
+                  ) as score,
+                  jsonb_build_object(
+                    'text', jsonb_build_object('rank', t.rank_text, 'score', t.text_score),
+                    'fuzzy', jsonb_build_object('rank', f.rank_fuzzy, 'score', f.fuzzy_score, 'title_sim', f.title_sim, 'location_sim', f.location_sim),
+                    'vector', jsonb_build_object('rank', v.rank_vector, 'score', v.vector_score)
+                  ) as debug
                 FROM
                   text_search t
-                  FULL OUTER JOIN vector_search v ON t.id = v.id
+                  FULL OUTER JOIN fuzzy_search f ON t.id = f.id
+                  FULL OUTER JOIN vector_search v ON COALESCE(t.id, f.id) = v.id
+                WHERE
+                  COALESCE(t.id, f.id, v.id) IS NOT NULL
                 ORDER BY
                   score DESC
                 LIMIT
@@ -324,7 +375,7 @@ def setup_hybrid_search_function():
                 $$;
                 """)
                 conn.commit()
-                print("Created hybrid search function using Reciprocal Rank Fusion")
+                print("Created enhanced hybrid search function with fuzzy matching capability")
                 return True
     except Exception as e:
         print(f"Warning: Failed to create hybrid search function: {e}")
@@ -364,7 +415,7 @@ def search(query_text, limit=5):
         print(f"Search error: {e}")
         return None
 
-def hybrid_search(query_text, query_embedding, limit, text_weight=1.0, vector_weight=1.0):
+def hybrid_search(query_text, query_embedding, limit, text_weight=1.0, vector_weight=1.0, fuzzy_weight=0.5):
     """Execute hybrid search using PostgreSQL function."""
     try:
         # Connect directly to PostgreSQL
@@ -375,19 +426,35 @@ def hybrid_search(query_text, query_embedding, limit, text_weight=1.0, vector_we
                 
                 # Call the hybrid search function with explicit casting
                 cur.execute(f"""
-                    SELECT * FROM hybrid_search(
+                    SELECT id, title, location, details, score 
+                    FROM hybrid_search(
                         %s, 
                         %s::vector, 
                         %s,
                         %s,
+                        %s,
                         %s
                     )
-                """, (query_text, embedding_str, limit, text_weight, vector_weight))
+                """, (query_text, embedding_str, limit, text_weight, vector_weight, fuzzy_weight))
                 
                 # Fetch results
                 results = cur.fetchall()
                 if results:
                     column_names = ["id", "title", "location", "details", "score"]
+                    
+                    # Print debug info
+                    try:
+                        cur.execute(f"""
+                            SELECT debug FROM hybrid_search(
+                                %s, %s::vector, 1, %s, %s, %s
+                            ) LIMIT 1
+                        """, (query_text, embedding_str, text_weight, vector_weight, fuzzy_weight))
+                        debug_info = cur.fetchone()
+                        if debug_info and debug_info[0]:
+                            print(f"Search debug info: {debug_info[0]}")
+                    except:
+                        pass
+                        
                     return (results, column_names)
                 return None
     except Exception as e:
